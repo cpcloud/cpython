@@ -640,6 +640,106 @@ void _pysqlite_func_callback(sqlite3_context* context, int argc, sqlite3_value**
 #endif
 }
 
+typedef struct {
+    int8_t argtype;
+    int8_t restype;
+    Py_ssize_t address;
+} NumbaFunc;
+
+
+typedef int64_t (*int64_int64)(int64_t);
+typedef int64_t (*int64_double)(double);
+typedef int64_t (*int64_text)(const uint8_t *);
+typedef double (*double_double)(double);
+typedef double (*double_int64)(int64_t);
+typedef double (*double_text)(const uint8_t *);
+typedef const char* (*text_text)(const uint8_t *);
+typedef const char* (*text_int64)(int64_t);
+typedef const char* (*text_double)(double);
+typedef void* (*null_int64)(int64_t);
+typedef void* (*null_double)(double);
+typedef void* (*null_text)(const uint8_t *);
+
+
+void _pysqlite_numba_callback(sqlite3_context* context, int argc, sqlite3_value** argv)
+{
+    NumbaFunc* nb_func = (NumbaFunc*) sqlite3_user_data(context);
+    int8_t argtype = nb_func->argtype;
+    int8_t restype = nb_func->restype;
+    Py_ssize_t address = nb_func->address;
+    sqlite3_value *arg0 = argv[0];
+    switch (restype) {
+        case SQLITE_INTEGER: {
+            switch (argtype) {
+                case SQLITE_INTEGER: {
+                    int64_int64 numbafunc = (int64_int64) address;
+                    sqlite3_result_int64(context, numbafunc(sqlite3_value_int64(arg0)));
+                    break;
+                }
+                case SQLITE_FLOAT: {
+                    int64_double numbafunc = (int64_double) address;
+                    sqlite3_result_int64(context, numbafunc(sqlite3_value_double(arg0)));
+                    break;
+                }
+                case SQLITE_TEXT: {
+                    int64_text numbafunc = (int64_text) address;
+                    sqlite3_result_int64(context, numbafunc(sqlite3_value_text(arg0)));
+                    break;
+                }
+                default:
+                    break;
+            }
+            break;
+        }
+        case SQLITE_FLOAT: {
+            switch (argtype) {
+                case SQLITE_INTEGER: {
+                    double_int64 numbafunc = (double_int64) address;
+                    sqlite3_result_double(context, numbafunc(sqlite3_value_int64(arg0)));
+                    break;
+                }
+                case SQLITE_FLOAT: {
+                    double_double numbafunc = (double_double) address;
+                    sqlite3_result_double(context, numbafunc(sqlite3_value_double(arg0)));
+                    break;
+                }
+                case SQLITE_TEXT: {
+                    double_text numbafunc = (double_text) address;
+                    sqlite3_result_double(context, numbafunc(sqlite3_value_text(arg0)));
+                    break;
+                }
+                default:
+                    break;
+            }
+            break;
+        }
+        case SQLITE_TEXT: {
+            switch (argtype) {
+                case SQLITE_INTEGER: {
+                    text_int64 numbafunc = (text_int64) address;
+                    sqlite3_result_text(context, numbafunc(sqlite3_value_int64(arg0)), -1, SQLITE_TRANSIENT);
+                    break;
+                }
+                case SQLITE_FLOAT: {
+                    text_double numbafunc = (text_double) address;
+                    sqlite3_result_text(context, numbafunc(sqlite3_value_double(arg0)), -1, SQLITE_TRANSIENT);
+                    break;
+                }
+                case SQLITE_TEXT: {
+                    text_text numbafunc = (text_text) address;
+                    sqlite3_result_text(context, numbafunc(sqlite3_value_text(arg0)), -1, SQLITE_TRANSIENT);
+                    break;
+                }
+                default:
+                    break;
+            }
+            break;
+        }
+        default:
+            break;
+    }
+}
+
 static void _pysqlite_step_callback(sqlite3_context *context, int argc, sqlite3_value** params)
 {
     PyObject* args;
@@ -860,6 +960,42 @@ PyObject* pysqlite_connection_create_function(pysqlite_Connection* self, PyObjec
         if (PyDict_SetItem(self->function_pinboard, func, Py_None) == -1)
             return NULL;
 
+        Py_RETURN_NONE;
+    }
+}
+
+PyObject* pysqlite_connection_create_numba_function(pysqlite_Connection* self, PyObject* args)
+{
+    char *name;
+    int8_t argtype;
+    int8_t restype;
+    size_t address;
+    int rc;
+    NumbaFunc numbafunc;
+
+    if (!PyArg_ParseTuple(args, "sbbn", &name, &argtype, &restype, &address)) {
+        return NULL;
+    }
+
+    numbafunc.argtype = argtype;
+    numbafunc.restype = restype;
+    numbafunc.address = address;
+
+    rc = sqlite3_create_function(
+        self->db,
+        name,
+        1,
+        SQLITE_UTF8,
+        &numbafunc,
+        _pysqlite_numba_callback,
+        NULL,
+        NULL
+    );
+
+    if (rc != SQLITE_OK) {
+        PyErr_SetString(pysqlite_OperationalError, "Epic Fail");
+        return NULL;
+    } else {
         Py_RETURN_NONE;
     }
 }
@@ -1638,6 +1774,8 @@ static PyMethodDef connection_methods[] = {
         PyDoc_STR("Roll back the current transaction.")},
     {"create_function", (PyCFunction)pysqlite_connection_create_function, METH_VARARGS|METH_KEYWORDS,
         PyDoc_STR("Creates a new function. Non-standard.")},
+    {"create_numba_function", (PyCFunction)pysqlite_connection_create_numba_function, METH_VARARGS,
+        PyDoc_STR("Creates a new numba function. Non-standard.")},
     {"create_aggregate", (PyCFunction)pysqlite_connection_create_aggregate, METH_VARARGS|METH_KEYWORDS,
         PyDoc_STR("Creates a new aggregate. Non-standard.")},
     {"set_authorizer", (PyCFunction)pysqlite_connection_set_authorizer, METH_VARARGS|METH_KEYWORDS,
